@@ -1,0 +1,15 @@
+python -m pip install shapely matplotlib numpy pandas
+
+python experimento.py
+
+# Só um método, todos os experimentos e chapas
+python experimento.py --metodo sparrow
+
+# Só um método em experimentos específicos
+python experimento.py --metodo GSAO --exp E4 E5 E6
+
+# Uma chapa específica
+python experimento.py --metodo BLF-SD --chapa 1000x2000mm
+
+# Forçar re-execução de algo já calculado
+python experimento.py --metodo sparrow --exp E1 --force
