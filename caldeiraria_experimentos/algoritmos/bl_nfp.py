@@ -179,7 +179,16 @@ def _metrics(sheets_layouts, all_pieces, W, L_max, elapsed_ms, metodo):
     ac=sum(W*z for z in z_pc)
     ap=sum(p["area"] for p in all_pieces)
     util=ap/ac*100 if ac>0 else 0.0
-    lb=max(max(p["height"] for p in all_placed),ap/W)
+    def _min_h_dict(p):
+        import math as _m
+        best=p["height"]
+        for ang in [90,180,270]:
+            r=_m.radians(ang); c,s=_m.cos(r),_m.sin(r)
+            pts=[(x*c-y*s,x*s+y*c) for x,y in p["polygon"]]
+            h=max(q[1] for q in pts)-min(q[1] for q in pts)
+            if h<best: best=h
+        return best
+    lb=max(max(_min_h_dict(p) for p in all_placed),ap/W)
     gp=round((z_total-lb)/z_total*100,2) if z_total>0 else None
     return {"metodo":metodo,"n_colocadas":len(all_placed),"n_total":len(all_pieces),
             "z":round(z_total,2),"z_lb":round(lb,2),"gap_pct":gp,

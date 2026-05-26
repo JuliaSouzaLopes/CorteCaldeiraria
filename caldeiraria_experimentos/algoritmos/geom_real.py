@@ -294,8 +294,25 @@ def compute_metrics(sheets_placed: list[list[PlacedPiece]],
     area_pecas = sum(p["area"] for p in all_pieces)
     util       = area_pecas / area_chapa * 100 if area_chapa > 0 else 0.0
 
-    # Lower bound z̲ = max(peça mais alta, área_total / W)
-    max_h  = max(pp.poly_local.bounds[3] for pp in all_placed)
+    # Lower bound z̲ = max(menor altura possível da peça mais alta, área_total / W)
+    # "Menor altura possível" = mínimo das alturas em 0°, 90°, 180°, 270°
+    # Isso garante que o LB seja independente da rotação escolhida pelo algoritmo.
+    def _min_height(pp: PlacedPiece) -> float:
+        import math as _math
+        poly = pp.poly_local
+        # Testa as 4 rotações ortogonais
+        best = poly.bounds[3]  # altura a 0°
+        for ang in [90, 180, 270]:
+            rad = _math.radians(ang)
+            c, s = _math.cos(rad), _math.sin(rad)
+            coords = list(poly.exterior.coords)
+            rotated = [(x*c - y*s, x*s + y*c) for x, y in coords]
+            h = max(p[1] for p in rotated) - min(p[1] for p in rotated)
+            if h < best:
+                best = h
+        return best
+
+    max_h  = max(_min_height(pp) for pp in all_placed)
     lb     = max(max_h, area_pecas / W)
     gap_pct = round((z_total - lb) / z_total * 100, 2) if z_total > 0 else None
 
