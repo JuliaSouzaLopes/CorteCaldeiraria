@@ -63,9 +63,9 @@ def run(pieces: list[dict], W: float, L_max: Optional[float] = None,
     # Pré-computa poles para cada peça (todas as orientações)
     piece_poles = _precompute_poles(pieces)
 
-    # Solução inicial via BL com comprimento livre (sparrow otimiza strip único)
+    # Solução inicial via BL com comprimento livre
     order = sorted(range(len(pieces)), key=lambda i: -pieces[i]["area"])
-    sol   = _bl_initial(order, pieces, W, None, gap_mm)  # L_max=None: sem limite inicial
+    sol   = _bl_initial(order, pieces, W, None, gap_mm)
     if not sol:
         return compute_metrics([], pieces, W, L_max,
                                (time.perf_counter()-t0)*1000, "sparrow")
@@ -139,7 +139,7 @@ def run(pieces: list[dict], W: float, L_max: Optional[float] = None,
 def _separate(sol, pieces, piece_poles, W, L_max, gap_mm,
               rng, weights, kmax, nmax, t0, tl):
     s_best = [_copy_pp(p) for p in sol]
-    z_best = _severity_total(s_best, piece_poles, weights)
+    z_best = _severity_total(s_best, piece_poles, weights, L_max)
     k = 0
 
     while k < kmax and time.perf_counter() - t0 < tl:
@@ -152,7 +152,7 @@ def _separate(sol, pieces, piece_poles, W, L_max, gap_mm,
             _move_items(sol_c, pieces, piece_poles, W, L_max,
                         gap_mm, rng, weights)
             _update_weights(sol_c, piece_poles, weights)
-            z = _severity_total(sol_c, piece_poles, weights)
+            z = _severity_total(sol_c, piece_poles, weights, L_max)
             n_iter += 1
 
             if z < z_best:
@@ -205,8 +205,8 @@ def _search_position(item, sol, pieces, piece_poles, W, L_max,
     others   = [p for p in sol if p.idx != item.idx]
     p_orig   = pieces[item.idx]
     poles_by_ang = piece_poles.get(item.idx, {})
-    z_bound  = max((_z_max(sol) * 1.2, item.bbox_h * 3))
-    if L_max: z_bound = min(z_bound, L_max)
+    # z_bound é o limite do strip atual — peças não podem sair para fora
+    z_bound = L_max if L_max else max(_z_max(sol) * 1.2, item.bbox_h * 3)
 
     candidates = []
 
@@ -434,26 +434,27 @@ def _eval_sample(item: PlacedPiece, poles_item: list,
     return e
 
 
-def _severity_total(sol, piece_poles, weights) -> float:
+def _severity_total(sol, piece_poles, weights, L_max=None) -> float:
     """
     Eq. 8 — severidade total da solução.
-    Usa área de interseção Shapely (exacto) para detectar colisões reais,
-    e poles apenas para quantificar a gravidade de colisões confirmadas.
-    Isso evita falsos positivos causados por poles de formas côncavas.
+    Inclui: (1) interseção real entre pares de peças (Shapely)
+            (2) penalidade por peças que excedem o limite L_max do strip
     """
     total = 0.0; n = len(sol)
     for i in range(n):
+        # Penalidade por exceder o limite do strip — força peças para dentro
+        if L_max is not None:
+            excess = sol[i].poly_placed.bounds[3] - L_max
+            if excess > 1e-6:
+                total += excess * sol[i].bbox_w
         for j in range(i+1, n):
-            # AABB rápido
             bi = sol[i].poly_placed.bounds
             bj = sol[j].poly_placed.bounds
             if bi[2] < bj[0] or bi[0] > bj[2] or bi[3] < bj[1] or bi[1] > bj[3]:
                 continue
-            # Interseção real
             inter = sol[i].poly_placed.intersection(sol[j].poly_placed)
             if inter.is_empty or inter.area < 1e-6:
                 continue
-            # Quantifica com poles (para guiar o GLS)
             poles_i = _translate_poles(
                 piece_poles.get(sol[i].idx, {}).get(sol[i].rot, []),
                 sol[i].x, sol[i].y
@@ -463,7 +464,6 @@ def _severity_total(sol, piece_poles, weights) -> float:
                 sol[j].x, sol[j].y
             )
             sev = _quantify_pair_poles(sol[i], poles_i, sol[j], poles_j)
-            # Garante que colisões reais tenham severidade mínima não-zero
             total += max(sev, inter.area)
     return total
 
@@ -552,25 +552,20 @@ def _bl_initial(order, pieces, W, L_max, gap_mm):
 
 def _shrink(sol, W, new_z):
     """
-    Encolhe o strip para new_z.
-    Peças que excedem new_z são empurradas aleatoriamente para dentro,
-    criando colisões temporárias que o GLS deve resolver (Alg. 12 do paper:
-    'items positioned right of this axis are shifted to the left').
+    Encolhe o strip para new_z (Alg. 12):
+    Peças que excedem new_z são empurradas para new_z - altura,
+    criando colisões reais dentro do strip que o GLS deve resolver.
+    Peças dentro do limite são mantidas na posição atual.
     """
-    import random as _rng
-    rng_shrink = _rng.Random(42)
     result = []
     for p in sol:
-        if p.poly_placed.bounds[3] <= new_z + 1e-6:
-            # Peça já dentro do novo limite — mantém
+        top = p.poly_placed.bounds[3]
+        if top <= new_z + 1e-6:
             result.append(_copy_pp(p))
         else:
-            # Peça excede o limite — empurra para posição aleatória dentro
-            ph = p.bbox_h
-            pw = p.bbox_w
-            new_y = rng_shrink.uniform(0, max(0.0, new_z - ph))
-            new_x = rng_shrink.uniform(0, max(0.0, W - pw))
-            pp = PlacedPiece(p.idx, new_x, new_y, p.rot,
+            # Empurra para dentro do strip (topo alinhado com new_z)
+            new_y = max(0.0, new_z - p.bbox_h)
+            pp = PlacedPiece(p.idx, p.x, new_y, p.rot,
                              p.tipo, p.label, p.area, p.poly_local)
             result.append(pp)
     return result
