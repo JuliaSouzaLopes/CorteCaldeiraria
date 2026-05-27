@@ -13,3 +13,17 @@ python experimento.py --metodo BLF-SD --chapa 1000x2000mm
 
 # Forçar re-execução de algo já calculado
 python experimento.py --metodo sparrow --exp E1 --force
+
+python experimento.py --metodo sparrow --exp E5 -chapa 1000x2000mm
+
+python experimento.py --metodo sparrow --expE6 --chapa 1000x2000mm
+
+python experimento.py --metodo sparrow --exp E5 --chapa 1500x3000mm
+
+python experimento.py --metodo sparrow --exp E6 --chapa 1500x3000mm
+
+
+
+
+
+

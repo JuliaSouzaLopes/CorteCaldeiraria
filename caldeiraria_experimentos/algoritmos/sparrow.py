@@ -60,10 +60,100 @@ def run(pieces: list[dict], W: float, L_max: Optional[float] = None,
     t0 = time.perf_counter()
     rng = random.Random(seed)
 
-    # Pré-computa poles para cada peça (todas as orientações)
     piece_poles = _precompute_poles(pieces)
 
-    # Solução inicial via BL com comprimento livre
+    if L_max is not None:
+        # ── MODO MULTI-CHAPA (chapa fixa) ────────────────────────────
+        # Estima número de chapas necessárias para distribuir o orçamento
+        # de tempo total entre elas, respeitando time_limit_s global.
+        total_area_pieces = sum(p["area"] for p in pieces)
+        area_sheet = W * L_max
+        n_sheets_est = max(1, int(total_area_pieces / area_sheet) + 2)
+        time_per_sheet = max(0.3, time_limit_s / n_sheets_est)
+
+        remaining = sorted(range(len(pieces)), key=lambda i: -pieces[i]["area"])
+        all_sheets = []
+
+        while remaining:
+            rem_pieces = [pieces[i] for i in remaining]
+            rem_poles  = _precompute_poles(rem_pieces)
+            n_loc      = len(rem_pieces)
+            weights_loc = {_wkey(i,j): 1.0
+                           for i in range(n_loc) for j in range(i+1, n_loc)}
+
+            order_loc = list(range(n_loc))
+            sol = _bl_initial(order_loc, rem_pieces, W, L_max, gap_mm)
+            if not sol:
+                break
+
+            best_sol = [_copy_pp(p) for p in sol]
+            best_z   = min(_z_max(sol), L_max)
+
+            # Se orçamento por chapa for muito pequeno, usa só BL (sem otimizar)
+            if time_per_sheet >= 0.5:
+                t1      = time.perf_counter()
+                tl_x    = time_per_sheet * TL_X
+                min_h   = min(p["height"] for p in rem_pieces)
+                rx_adap = max(RX, min_h / (best_z + 1e-9))
+                pool_inf = []
+
+                # EXPLORE
+                while time.perf_counter() - t1 < tl_x:
+                    new_z = best_z * (1 - rx_adap)
+                    sol_s = _shrink(best_sol, W, new_z)
+                    sol_sep, z_sep = _separate(
+                        sol_s, rem_pieces, rem_poles, W, new_z, gap_mm,
+                        rng, weights_loc, KX, NX, t1, t1 + tl_x
+                    )
+                    if z_sep is not None and z_sep < best_z - 0.5:
+                        best_sol = [_copy_pp(p) for p in sol_sep]
+                        best_z   = min(_z_max(best_sol), L_max)
+                        rx_adap  = max(RX, min_h / (best_z + 1e-9))
+                    else:
+                        pool_inf.append((z_sep or best_z,
+                                         [_copy_pp(p) for p in sol_sep]))
+                        if pool_inf:
+                            pool_inf.sort(key=lambda x: x[0])
+                            sol = _swap_two_large(
+                                [_copy_pp(p) for p in pool_inf[0][1]], rng)
+
+                # COMPRESS
+                t_c0  = time.perf_counter() - t1
+                tl_c  = time_per_sheet * TL_C
+                t_end = t1 + time_per_sheet
+                while time.perf_counter() < t_end:
+                    tau = (time.perf_counter() - t1) - t_c0
+                    r   = RS_C + (RE_C - RS_C) * min(1.0, tau / (tl_c + 1e-9))
+                    shrink_mm = max(best_z * r, 1.0)
+                    new_z = best_z - shrink_mm
+                    sol_s = _shrink(best_sol, W, new_z)
+                    sol_sep, z_sep = _separate(
+                        sol_s, rem_pieces, rem_poles, W, new_z, gap_mm,
+                        rng, weights_loc, KC, NC, t1, t_end
+                    )
+                    if z_sep is not None and z_sep < best_z - 0.5:
+                        best_sol = [_copy_pp(p) for p in sol_sep]
+                        best_z   = min(_z_max(best_sol), L_max)
+
+                if not _is_feasible(best_sol, rem_poles):
+                    best_sol = _bl_initial(order_loc, rem_pieces, W, L_max, gap_mm)
+
+            # Só aceita peças que ficaram dentro de L_max
+            sheet = [p for p in best_sol
+                     if p.poly_placed.bounds[3] <= L_max + 1e-6]
+            if not sheet:
+                sheet = [best_sol[0]]  # fallback: 1 peça por chapa
+
+            placed_local = {p.idx for p in sheet}
+            all_sheets.append(sheet)
+            remaining = [remaining[i] for i in range(len(remaining))
+                         if i not in placed_local]
+
+        elapsed_ms = (time.perf_counter() - t0) * 1000
+        return compute_metrics(all_sheets if all_sheets else [[]],
+                               pieces, W, L_max, elapsed_ms, "sparrow")
+
+    # ── MODO STRIP LIVRE (sem L_max) ─────────────────────────────────
     order = sorted(range(len(pieces)), key=lambda i: -pieces[i]["area"])
     sol   = _bl_initial(order, pieces, W, None, gap_mm)
     if not sol:
@@ -73,26 +163,21 @@ def run(pieces: list[dict], W: float, L_max: Optional[float] = None,
     best_sol = [_copy_pp(p) for p in sol]
     best_z   = _z_max(sol)
 
-    # Pesos GLS: inicializados em 1 para todos os pares  (Alg. 7-8)
     n = len(pieces)
-    weights = {_wkey(i,j): 1.0 for i in range(n) for j in range(i+1,n)}
-
+    weights = {_wkey(i,j): 1.0 for i in range(n) for j in range(i+1, n)}
     tl_x = time_limit_s * TL_X
-
-    # ── FASE EXPLORE (Alg. 12) ───────────────────────────────────────
-    # RX adaptativo: pelo menos 1 altura mínima de peça por shrink
     min_piece_h = min(p["height"] for p in pieces)
     rx_adaptive = max(RX, min_piece_h / (best_z + 1e-9))
     pool_inf = []
+
     while time.perf_counter() - t0 < tl_x:
         new_z = best_z * (1 - rx_adaptive)
         sol_s = _shrink(best_sol, W, new_z)
         sol_sep, z_sep = _separate(
             sol_s, pieces, piece_poles, W, new_z, gap_mm,
-            rng, weights, KX, NX, t0, tl_x
+            rng, weights, KX, NX, t0, t0 + tl_x
         )
         if z_sep is not None and z_sep < best_z - 0.5:
-            # Aceita qualquer melhoria real (não apenas se atingiu o target)
             best_sol = [_copy_pp(p) for p in sol_sep]
             best_z   = _z_max(best_sol)
             rx_adaptive = max(RX, min_piece_h / (best_z + 1e-9))
@@ -103,35 +188,27 @@ def run(pieces: list[dict], W: float, L_max: Optional[float] = None,
                 s_hat = [_copy_pp(p) for p in pool_inf[0][1]]
                 sol   = _swap_two_large(s_hat, rng)
 
-    # ── FASE COMPRESS (Alg. 13) ─────────────────────────────────────
     t_c0 = time.perf_counter() - t0
     tl_c = time_limit_s * TL_C
     while time.perf_counter() - t0 < time_limit_s:
         tau  = (time.perf_counter() - t0) - t_c0
         r    = RS_C + (RE_C - RS_C) * min(1.0, tau / (tl_c + 1e-9))
-        # Garante shrink mínimo de 1mm
         shrink_mm = max(best_z * r, 1.0)
         new_z = best_z - shrink_mm
         sol_s = _shrink(best_sol, W, new_z)
         sol_sep, z_sep = _separate(
             sol_s, pieces, piece_poles, W, new_z, gap_mm,
-            rng, weights, KC, NC, t0, time_limit_s
+            rng, weights, KC, NC, t0, t0 + time_limit_s
         )
         if z_sep is not None and z_sep < best_z - 0.5:
             best_sol = [_copy_pp(p) for p in sol_sep]
             best_z   = _z_max(best_sol)
 
     elapsed_ms = (time.perf_counter() - t0) * 1000
-    # Verifica factibilidade final com Shapely
     if not _is_feasible(best_sol, piece_poles):
         order = sorted(range(len(pieces)), key=lambda i: -pieces[i]["area"])
         best_sol = _bl_initial(order, pieces, W, None, gap_mm)
-    # Para chapa fixa: divide o layout em chapas do comprimento dado
-    if L_max is not None:
-        sheets = _split_into_sheets(best_sol, L_max)
-    else:
-        sheets = [best_sol]
-    return compute_metrics(sheets, pieces, W, L_max, elapsed_ms, "sparrow")
+    return compute_metrics([best_sol], pieces, W, L_max, elapsed_ms, "sparrow")
 
 
 # ── SEPARATE (Alg. 9) ────────────────────────────────────────────────
