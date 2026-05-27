@@ -1,0 +1,2 @@
+﻿exp_id,exp_desc,n_pecas,n_tipos,sheet_label,sheet_W,sheet_L,fixed,metodo,n_colocadas,n_total,z,z_lb,gap_pct,area_chapa,area_pecas,utilizacao,refugo,tempo_ms,n_chapas,media_pecas_chapa,n_restricoes,n_vars_binarias
+E5,40 peças · 2 tipos · DN300 · peças grandes,40,2,1000x2000mm,1000.0,2000.0,True,sparrow,40,40,1915.84,8164.23,-326.14,1915842.31,8164228.61,426.14,-326.14,3109381.74,1,40.0,,
