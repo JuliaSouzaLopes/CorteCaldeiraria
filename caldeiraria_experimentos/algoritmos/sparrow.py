@@ -530,19 +530,35 @@ def _is_feasible(sol: list, piece_poles: dict) -> bool:
 
 
 def _bl_initial(order, pieces, W, L_max, gap_mm):
+    """
+    Solução inicial BL: testa todas as rotações ortogonais e escolhe
+    a que produz menor (y+h, x) — mesmo critério do bl_nfp._try_place.
+    Isso garante que o sparrow parta de uma solução compacta,
+    equivalente ao BL construtivo sem 2-exchange.
+    """
+    import math as _math
     placed = []
     for idx in order:
         p = pieces[idx]
-        for ang in [0, 90]:
+        best_pp  = None
+        best_key = (_math.inf, _math.inf)
+        for ang in ANGLES:
             poly = rotate_polygon(p["polygon"], ang)
             pos  = place_bl(poly, placed, W, L_max, gap_mm)
-            if pos:
-                x, y = pos
-                placed.append(PlacedPiece(idx, x, y, ang,
-                                          p["tipo"], p["label"],
-                                          p["area"], poly))
-                break
+            if pos is None:
+                continue
+            x, y = pos
+            h = poly.bounds[3]
+            key = (y + h, x)
+            if key < best_key:
+                best_key = key
+                best_pp  = PlacedPiece(idx, x, y, ang,
+                                       p["tipo"], p["label"],
+                                       p["area"], poly)
+        if best_pp is not None:
+            placed.append(best_pp)
         else:
+            # Fallback: força em (0,0) se nenhuma rotação cabe
             poly = rotate_polygon(p["polygon"], 0)
             placed.append(PlacedPiece(idx, 0, 0, 0,
                                       p["tipo"], p["label"],

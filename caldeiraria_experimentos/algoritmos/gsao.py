@@ -186,19 +186,31 @@ def _decode(chrom, pieces, W, L_max, gap_mm):
         still  = []
 
         for (idx, ang) in remaining:
-            p    = pieces[idx]
-            poly = rotate_polygon(p["polygon"], ang)
-            pos  = place_bl(poly, placed, W, L_max, gap_mm)
-            if pos is None:
+            p = pieces[idx]
+            # Testa o ângulo do cromossomo primeiro; se não couber,
+            # tenta as outras rotações ortogonais antes de desistir
+            best_pp = None
+            best_key = (float('inf'), float('inf'))
+            for a in ([ang] + [a for a in ANGLES if a != ang]):
+                poly = rotate_polygon(p["polygon"], a)
+                pos  = place_bl(poly, placed, W, L_max, gap_mm)
+                if pos is not None:
+                    x, y = pos
+                    h = poly.bounds[3]
+                    key = (y + h, x)
+                    if key < best_key:
+                        best_key = key
+                        best_pp  = PlacedPiece(idx, x, y, a,
+                                               p["tipo"], p["label"],
+                                               p["area"], poly)
+                    break  # aceita a primeira rotação válida (BL já é greedy)
+            if best_pp is None:
                 still.append((idx, ang))
             else:
-                x, y = pos
-                placed.append(PlacedPiece(idx, x, y, ang,
-                                          p["tipo"], p["label"],
-                                          p["area"], poly))
+                placed.append(best_pp)
 
         if not placed:
-            # Força restantes em y=0 (fallback)
+            # Força restantes em y=0 (fallback — não deveria acontecer com L=None)
             for (idx, ang) in still:
                 p    = pieces[idx]
                 poly = rotate_polygon(p["polygon"], ang)
