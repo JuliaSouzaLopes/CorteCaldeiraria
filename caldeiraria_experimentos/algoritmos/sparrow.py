@@ -144,10 +144,13 @@ def run(pieces: list[dict], W: float, L_max: Optional[float] = None,
             if not sheet:
                 sheet = [best_sol[0]]  # fallback: 1 peça por chapa
 
-            placed_local = {p.idx for p in sheet}
+            # p.idx é o índice local em rem_pieces (0..n_loc-1)
+            # remaining[p.idx] é o índice global correspondente
+            placed_local_idx = {p.idx for p in sheet}
             all_sheets.append(sheet)
+            # Remove de remaining apenas os índices locais que foram alocados
             remaining = [remaining[i] for i in range(len(remaining))
-                         if i not in placed_local]
+                         if i not in placed_local_idx]
 
         elapsed_ms = (time.perf_counter() - t0) * 1000
         return compute_metrics(all_sheets if all_sheets else [[]],
@@ -634,12 +637,8 @@ def _bl_initial(order, pieces, W, L_max, gap_mm):
                                        p["area"], poly)
         if best_pp is not None:
             placed.append(best_pp)
-        else:
-            # Fallback: força em (0,0) se nenhuma rotação cabe
-            poly = rotate_polygon(p["polygon"], 0)
-            placed.append(PlacedPiece(idx, 0, 0, 0,
-                                      p["tipo"], p["label"],
-                                      p["area"], poly))
+        # Se nenhuma rotação cabe dentro de L_max, simplesmente pula a peça
+        # (será alocada na próxima chapa)
     return placed
 
 
